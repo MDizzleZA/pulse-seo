@@ -1,0 +1,93 @@
+{
+  "name": "pulse-seo",
+  "productName": "Pulse SEO",
+  "version": "0.1.0",
+  "description": "Pulse SEO - desktop SEO crawler and site auditor",
+  "main": "out/main/index.js",
+  "type": "module",
+  "author": "Marcos Diez",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "rebuild": "node scripts/fix-native.mjs",
+    "postinstall": "node scripts/fix-native.mjs",
+    "dist": "electron-vite build && electron-builder --win",
+    "pwa:dev": "vite -c pwa/vite.config.ts",
+    "pwa:build": "vite build -c pwa/vite.config.ts",
+    "pwa:package": "node scripts/package-online.mjs",
+    "pwa:package:netlify": "node scripts/package-netlify.mjs"
+  },
+  "build": {
+    "appId": "com.pulseseo.app",
+    "productName": "Pulse SEO",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**"
+    ],
+    "npmRebuild": false,
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**",
+      "**/node_modules/@napi-rs/**"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}.${ext}"
+    }
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "^1.3.0",
+    "@xmldom/xmldom": "^0.9.10",
+    "ag-grid-community": "^36.0.0",
+    "ag-grid-react": "^36.0.0",
+    "axe-core": "^4.12.1",
+    "better-sqlite3": "^12.11.1",
+    "cheerio": "^1.2.0",
+    "d3": "^7.9.0",
+    "docx": "^9.7.1",
+    "exceljs": "^4.4.0",
+    "fast-xml-parser": "^5.10.0",
+    "google-auth-library": "^10.9.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "robots-parser": "^3.0.1",
+    "sql.js": "^1.14.1",
+    "undici": "^8.7.0",
+    "xpath": "^0.0.34"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/d3": "^7.4.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/sql.js": "^1.4.11",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^42.6.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.10",
+    "zod": "^4.4.3"
+  }
+}

@@ -1,0 +1,48 @@
+# Pulse SEO Viewer — Apache config for the app directory.
+# Place this file INSIDE the deployed site/ folder (rename to .htaccess).
+# Requires: mod_headers. Serve over HTTPS only.
+
+# ---------------------------------------------------------------- security headers
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "DENY"
+  Header always set Referrer-Policy "no-referrer"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+  # 6 months HSTS; extend once you are confident in the HTTPS setup.
+  Header always set Strict-Transport-Security "max-age=15552000"
+  # sql.js needs wasm-unsafe-eval; React style attributes need inline styles.
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+  # Immutable hashed assets; HTML must always revalidate (the SW depends on it).
+  <FilesMatch "\.(js|css|wasm|png)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+  <FilesMatch "\.(html|webmanifest)$|^sw\.js$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>
+
+# sw.js must NOT be cached long-term or updates stall.
+<Files "sw.js">
+  Header set Cache-Control "no-cache"
+</Files>
+
+# Correct MIME for wasm (some shared hosts miss it).
+AddType application/wasm .wasm
+AddType application/manifest+json .webmanifest
+
+# Never serve crawl project files even if one is uploaded by mistake.
+<FilesMatch "\.pulse$">
+  Require all denied
+</FilesMatch>
+
+# ---------------------------------------------------------------- AUTH GATE (REQUIRED)
+# The app ships NO authentication. This directory MUST be protected before launch.
+# Option A: HTTP Basic auth (quickest; per-customer credentials):
+#   AuthType Basic
+#   AuthName "Pulse SEO Viewer"
+#   AuthUserFile /home/USER/.htpasswds/pulse-viewer/passwd
+#   Require valid-user
+# Option B: WordPress membership plugin protecting this path (MemberPress /
+#   Restrict Content Pro rule on the subdirectory), or
+# Option C: Cloudflare Access in front of the subdomain (recommended: SSO,
+#   per-seat control, logs). See README-DEPLOY.md.

@@ -1,0 +1,4 @@
+# Single-page app: serve index.html for any path that isn't a real file.
+# Existing files (assets, wasm, sw.js, icons) are served directly and are not
+# affected by this rule.
+/*    /index.html   200

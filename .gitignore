@@ -1,0 +1,14 @@
+node_modules/
+out/
+build/
+dist/
+release/
+pwa-dist/
+*.local
+.env
+.env.*
+*.pulse
+*.db
+*.sqlite*
+.DS_Store
+Thumbs.db

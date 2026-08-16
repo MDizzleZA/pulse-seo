@@ -1,0 +1,13 @@
+# Pulse SEO Viewer — Netlify config.
+# This whole folder IS the deploy: no build step (assets are prebuilt).
+# Security headers and the SPA fallback live in _headers / _redirects, which
+# Netlify always honours in the publish directory.
+
+[build]
+  publish = "."
+  command = ""
+
+# The bundle is already built and the CSP is strict — don't let Netlify mutate
+# assets (minify/bundle) or it can break hashed filenames and inline budgets.
+[build.processing]
+  skip_processing = true
