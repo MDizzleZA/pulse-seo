@@ -1,0 +1,21 @@
+{
+  "name": "Pulse SEO Viewer",
+  "short_name": "Pulse Viewer",
+  "description": "Open Pulse SEO crawl projects (.pulse) in the browser — health scores, issues and every crawl view, fully offline.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": { "application/octet-stream": [".pulse"] }
+    }
+  ]
+}
