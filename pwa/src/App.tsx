@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TABS, tabById } from '../../src/shared/tabs';
 import type { OverviewCounts } from '../../src/shared/types';
 import { openPulseFile, createEmptyProject, PulseDb, type PageDetailLite } from './db';
-import { downloadViewCsv } from './export';
+import { downloadViewCsv, downloadFullCsv } from './export';
+import { crawlSite, type CrawlProgress, type CrawledPage } from './crawler';
+import { isInternalUrl, baseDomainOf } from '../../src/crawler/url-utils';
 
 const PAGE = 200;
 
@@ -18,9 +20,7 @@ const CATEGORY_TAB: Record<string, string> = {
 
 export default function App(): React.JSX.Element {
   const [db, setDb] = useState<PulseDb | null>(null);
-  const [fileName, setFileName] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
   const [overview, setOverview] = useState<OverviewCounts | null>(null);
   const [tab, setTab] = useState('internal');
   const [filter, setFilter] = useState<string | null>(null);
@@ -30,62 +30,152 @@ export default function App(): React.JSX.Element {
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [detail, setDetail] = useState<PageDetailLite | null>(null);
-  const [newMsg, setNewMsg] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const initRef = useRef(false);
+  const [crawlUrl, setCrawlUrl] = useState('');
+  const [crawling, setCrawling] = useState(false);
+  const [progress, setProgress] = useState<CrawlProgress | null>(null);
+  const crawlAbort = useRef<AbortController | null>(null);
 
-  const startNewProject = useCallback(async () => {
-    setError(null);
-    setNewMsg(null);
-    const raw = window.prompt('Name your new project:', 'new-crawl');
-    if (raw === null) return; // cancelled
-    const name = (raw.trim() || 'new-crawl').replace(/[^a-z0-9-_ ]/gi, '').replace(/\s+/g, '-');
-    try {
-      const blob = await createEmptyProject();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${name}.pulse`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setNewMsg(
-        `Created ${name}.pulse. Open it in the Pulse SEO desktop app to crawl a site, ` +
-          `then bring the file back here to explore the results.`
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+  useEffect(() => {
+    if (initRef.current) return;
+    initRef.current = true;
+    (async () => {
+      try {
+        const blob = await createEmptyProject();
+        const buf = await blob.arrayBuffer();
+        const opened = await openPulseFile(buf);
+        setDb(opened);
+        setOverview(opened.overview());
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    })();
+  }, []);
+
+  const runBasicChecks = useCallback((currentDb: PulseDb, pageId: number, page: CrawledPage) => {
+    if (page.status === 0) return;
+    if (page.isInternal && page.status >= 400 && page.status < 500) {
+      currentDb.insertIssue('response-broken-internal', pageId, `HTTP ${page.status}`);
+    }
+    if (!page.isInternal && page.status >= 400 && page.status < 500) {
+      currentDb.insertIssue('response-broken-external', pageId, `HTTP ${page.status}`);
+    }
+    if (page.status >= 500) {
+      currentDb.insertIssue('response-5xx', pageId, `HTTP ${page.status}`);
+    }
+    if (page.isInternal && page.status === 200) {
+      if (!page.title) currentDb.insertIssue('title-missing', pageId, null);
+      if (page.title && page.title.length > 60) currentDb.insertIssue('title-long', pageId, `${page.title.length} chars`);
+      if (page.title && page.title.length < 10 && page.title.length > 0) currentDb.insertIssue('title-short', pageId, `${page.title.length} chars`);
+      if (!page.metaDescription) currentDb.insertIssue('desc-missing', pageId, null);
+      if (page.metaDescription && page.metaDescription.length > 160) currentDb.insertIssue('desc-long', pageId, `${page.metaDescription.length} chars`);
+      if (page.h1.length === 0) currentDb.insertIssue('h1-missing', pageId, null);
+      if (page.h1.length > 1) currentDb.insertIssue('h1-multiple', pageId, `${page.h1.length} H1 tags`);
+      if (!page.canonical) currentDb.insertIssue('canonical-missing', pageId, null);
+      if (page.metaRobots?.includes('noindex')) currentDb.insertIssue('directives-noindex', pageId, page.metaRobots);
+      if (!page.viewport) currentDb.insertIssue('mobile-viewport-missing', pageId, null);
+      if (page.wordCount < 100 && page.wordCount > 0) currentDb.insertIssue('content-thin', pageId, `${page.wordCount} words`);
+      if (page.images.some(img => img.alt === null || img.alt === '')) {
+        const count = page.images.filter(img => img.alt === null || img.alt === '').length;
+        currentDb.insertIssue('images-missing-alt', pageId, `${count} images`);
+      }
     }
   }, []);
 
-  const openFile = useCallback(async (f: File) => {
-    if (f.size > 300 * 1024 * 1024) {
-      const mb = Math.round(f.size / 1024 / 1024);
-      if (!window.confirm(`This file is ${mb} MB and loads fully into memory. Continue?`)) return;
-    }
-    setLoading(true);
+  const startCrawl = useCallback(async () => {
+    if (!db || !crawlUrl.trim()) return;
+    let url = crawlUrl.trim();
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+
+    setCrawling(true);
     setError(null);
+    crawlAbort.current = new AbortController();
+
+    const freshBlob = await createEmptyProject();
+    const freshBuf = await freshBlob.arrayBuffer();
+    const freshDb = await openPulseFile(freshBuf);
+    setDb(prev => { prev?.close(); return freshDb; });
+
+    const domain = baseDomainOf(new URL(url).hostname);
+
     try {
-      const buf = await f.arrayBuffer();
-      const opened = await openPulseFile(buf);
-      setDb((prev) => {
-        prev?.close();
-        return opened;
+      await crawlSite({
+        startUrl: url,
+        maxPages: 100,
+        maxDepth: 3,
+        signal: crawlAbort.current.signal,
+        onProgress: (p) => setProgress({ ...p }),
+        onPage: (page) => {
+          const pageId = freshDb.insertPage({
+            url: page.url,
+            isInternal: page.isInternal ? 1 : 0,
+            status: page.status,
+            statusText: page.statusText,
+            error: page.error,
+            contentType: page.contentType,
+            depth: page.depth,
+            size: page.size,
+            responseMs: page.responseMs,
+            title: page.title,
+            titleCount: page.titleCount,
+            metaDescription: page.metaDescription,
+            metaDescriptionCount: page.metaDescriptionCount,
+            metaRobots: page.metaRobots,
+            canonical: page.canonical,
+            canonicalAll: page.canonicalAll,
+            viewport: page.viewport,
+            h1: page.h1,
+            h2: page.h2,
+            wordCount: page.wordCount,
+            indexable: page.indexable ? 1 : 0,
+            indexabilityReason: page.indexabilityReason,
+            headers: JSON.stringify(page.headers),
+            og: JSON.stringify(page.og),
+            spaFramework: page.spaFramework,
+            relNext: page.relNext,
+            relPrev: page.relPrev,
+          });
+
+          for (const link of page.links) {
+            freshDb.insertLink(
+              pageId, link.href, link.anchor,
+              link.follow ? 1 : 0,
+              isInternalUrl(link.href, domain, true) ? 1 : 0
+            );
+          }
+
+          for (const img of page.images) {
+            freshDb.insertImage(pageId, img);
+          }
+
+          for (const hl of page.hreflang) {
+            freshDb.insertHreflang(pageId, hl.lang, hl.href);
+          }
+
+          for (const sd of page.structuredData) {
+            freshDb.insertStructuredData(pageId, sd);
+          }
+
+          runBasicChecks(freshDb, pageId, page);
+          setOverview(freshDb.overview());
+        },
       });
-      setFileName(f.name);
-      setOverview(opened.overview());
-      setTab('internal');
-      setFilter(null);
-      setSearch('');
-      setDetail(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
-  // Query on any navigation change.
+      freshDb.linkDstIds();
+      setOverview(freshDb.overview());
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setCrawling(false);
+      setProgress(null);
+      crawlAbort.current = null;
+    }
+  }, [db, crawlUrl, runBasicChecks]);
+
+
+  // Query on any navigation or data change.
   useEffect(() => {
     if (!db) return;
     const res = db.query({
@@ -94,7 +184,7 @@ export default function App(): React.JSX.Element {
     });
     setRows(res.rows);
     setTotal(res.total);
-  }, [db, tab, filter, search, sortCol, sortDir]);
+  }, [db, tab, filter, search, sortCol, sortDir, overview]);
 
   const loadMore = (): void => {
     if (!db) return;
@@ -127,52 +217,15 @@ export default function App(): React.JSX.Element {
     return Math.round(overview.health.reduce((s, h) => s + h.score, 0) / overview.health.length);
   }, [overview]);
 
-  // ------------------------------------------------------------- landing
+  // ------------------------------------------------------------- loading
   if (!db) {
     return (
-      <div
-        className="h-full flex items-center justify-center"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          const f = e.dataTransfer.files[0];
-          if (f) openFile(f);
-        }}
-      >
-        <div className="text-center max-w-md px-6">
-          <div className="text-3xl font-bold tracking-tight mb-1">
-            <span className="text-emerald-400">Pulse SEO</span>
-            <span className="text-slate-300"> Pulse</span>
-            <span className="text-slate-500 font-medium text-xl"> Viewer</span>
-          </div>
-          <div className="text-slate-500 mb-6">
-            Open a crawl project in your browser — everything stays on this device.
-          </div>
-          <div className="flex gap-3 justify-center">
-            <button className="btn btn-primary px-6 py-2" onClick={() => fileRef.current?.click()}>
-              {loading ? 'Opening…' : 'Open .pulse file'}
-            </button>
-            <button className="btn btn-secondary px-6 py-2" onClick={startNewProject}>
-              Start new project
-            </button>
-          </div>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".pulse"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) openFile(f);
-            }}
-          />
-          <div className="text-xs text-slate-600 mt-4">…or drag a .pulse file anywhere onto this page.</div>
-          {error && <div className="mt-4 text-sm text-red-400">{error}</div>}
-          {newMsg && <div className="mt-4 text-sm text-emerald-400 max-w-md mx-auto">{newMsg}</div>}
-          <div className="text-xs text-slate-600 mt-8">
-            Crawling runs in the Pulse SEO desktop app for Windows — the browser viewer
-            reads and creates project files, but can't crawl sites itself.
-          </div>
+      <div className="h-full flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-emerald-400 text-xl font-bold mb-2">Pulse SEO</div>
+          {error
+            ? <div className="text-sm text-red-400">{error}</div>
+            : <div className="text-slate-500 text-sm">Loading…</div>}
         </div>
       </div>
     );
@@ -181,39 +234,56 @@ export default function App(): React.JSX.Element {
   // ------------------------------------------------------------- viewer
   return (
     <div className="h-full flex flex-col">
-      <header className="flex items-center gap-3 px-4 py-2 bg-slate-900 border-b border-slate-700 shrink-0">
-        <span className="text-emerald-400 font-bold tracking-tight">
-          Pulse SEO<span className="text-slate-300 font-medium"> Pulse</span>
-          <span className="text-slate-500 font-medium"> Viewer</span>
+      <header className="flex items-center gap-2 px-4 py-2 bg-slate-900 border-b border-slate-700 shrink-0 flex-wrap">
+        <span className="text-emerald-400 font-bold tracking-tight whitespace-nowrap">
+          Pulse SEO
         </span>
-        <span className="text-slate-600 text-[10px]">v{__APP_VERSION__}</span>
-        <span className="text-slate-500 text-xs truncate">{fileName}</span>
-        <span className="text-slate-600 text-xs">
-          {overview?.crawlInfo.pages ?? 0} URLs · {overview?.crawlInfo.internal ?? 0} internal ·{' '}
-          {overview?.crawlInfo.indexable ?? 0} indexable
-        </span>
+        <form className="flex items-center gap-1.5 flex-1 min-w-48 max-w-md" onSubmit={(e) => { e.preventDefault(); startCrawl(); }}>
+          <input
+            className="input flex-1"
+            placeholder="Enter URL to crawl..."
+            value={crawlUrl}
+            onChange={(e) => setCrawlUrl(e.target.value)}
+            disabled={crawling}
+          />
+          {crawling ? (
+            <button type="button" className="btn bg-red-700 hover:bg-red-600 text-white" onClick={() => crawlAbort.current?.abort()}>
+              Stop
+            </button>
+          ) : (
+            <button type="submit" className="btn btn-primary" disabled={!crawlUrl.trim()}>
+              Crawl
+            </button>
+          )}
+        </form>
+        {progress && (
+          <span className="text-xs text-slate-400 whitespace-nowrap">
+            {progress.crawled} crawled · {progress.queued} queued{progress.errors > 0 ? ` · ${progress.errors} errors` : ''}
+          </span>
+        )}
+        {!progress && (overview?.crawlInfo.pages ?? 0) > 0 && (
+          <span className="text-slate-500 text-xs whitespace-nowrap">
+            {overview?.crawlInfo.pages ?? 0} URLs · {overview?.crawlInfo.internal ?? 0} internal ·{' '}
+            {overview?.crawlInfo.indexable ?? 0} indexable
+          </span>
+        )}
         <div className="flex-1" />
         {siteScore !== null && (
-          <span className="text-xs text-slate-400">
-            Site health{' '}
+          <span className="text-xs text-slate-400 whitespace-nowrap">
+            Health{' '}
             <b className={siteScore >= 80 ? 'text-emerald-400' : siteScore >= 50 ? 'text-yellow-400' : 'text-red-400'}>
               {siteScore}/100
             </b>
           </span>
         )}
-        <button className="btn btn-secondary" onClick={() => fileRef.current?.click()}>
-          Open another
+        <button
+          className="btn btn-secondary text-xs"
+          disabled={!overview || (overview.crawlInfo.pages ?? 0) === 0}
+          onClick={() => db && downloadFullCsv(db)}
+          title="Download all crawled pages as CSV (all columns)"
+        >
+          ↓ Export All
         </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".pulse"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) openFile(f);
-          }}
-        />
       </header>
 
       <div className="flex flex-1 min-h-0">

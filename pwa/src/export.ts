@@ -40,6 +40,39 @@ export function buildViewCsv(
   return { name, csv: lines.join('\r\n') + '\r\n', rows: lines.length - 1 };
 }
 
+export function downloadFullCsv(db: PulseDb): number {
+  const cols = [
+    'url', 'is_internal', 'status', 'status_text', 'indexable',
+    'indexability_reason', 'content_type', 'title', 'meta_description',
+    'meta_robots', 'canonical', 'h1', 'h2', 'word_count', 'depth',
+    'viewport', 'response_ms', 'size', 'segment', 'spa_framework',
+  ];
+  const labels = [
+    'URL', 'Internal', 'Status', 'Status Text', 'Indexable',
+    'Indexability Reason', 'Content Type', 'Title', 'Meta Description',
+    'Meta Robots', 'Canonical', 'H1', 'H2', 'Word Count', 'Depth',
+    'Viewport', 'Time (ms)', 'Size (B)', 'Segment', 'SPA Framework',
+  ];
+  const lines = [labels.map(csvEscape).join(',')];
+  const rows = db.all(
+    `SELECT ${cols.join(', ')} FROM pages WHERE fetched >= 1 ORDER BY is_internal DESC, url`
+  );
+  for (const row of rows) {
+    lines.push(cols.map((c) => csvEscape(row[c])).join(','));
+  }
+  const csv = lines.join('\r\n') + '\r\n';
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'pulse-seo-full-export.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  return rows.length;
+}
+
 export function downloadViewCsv(
   db: PulseDb,
   tab: string,

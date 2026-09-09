@@ -75,6 +75,96 @@ export class PulseDb {
     this.db.close();
   }
 
+  run(sql: string, params: unknown[] = []): void {
+    this.db.run(sql, params as never[]);
+  }
+
+  insertPage(p: {
+    url: string; isInternal: number; status: number; statusText: string;
+    error: string | null; contentType: string | null; depth: number;
+    size: number; responseMs: number; title: string | null; titleCount: number;
+    metaDescription: string | null; metaDescriptionCount: number;
+    metaRobots: string | null; canonical: string | null; canonicalAll: string[];
+    viewport: string | null; h1: string[]; h2: string[];
+    wordCount: number; indexable: number; indexabilityReason: string | null;
+    headers: string; og: string; spaFramework: string | null;
+    relNext: string | null; relPrev: string | null;
+  }): number {
+    this.db.run(
+      `INSERT OR REPLACE INTO pages (
+        url, is_internal, fetched, status, status_text, error, content_type,
+        depth, size, response_ms, title, title_count,
+        meta_description, meta_description_count, meta_robots,
+        canonical, canonical_all, viewport, h1, h2,
+        word_count, indexable, indexability_reason,
+        headers, og, spa_framework, rel_next, rel_prev
+      ) VALUES (?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        p.url, p.isInternal, p.status, p.statusText, p.error, p.contentType,
+        p.depth, p.size, p.responseMs, p.title, p.titleCount,
+        p.metaDescription, p.metaDescriptionCount, p.metaRobots,
+        p.canonical, p.canonicalAll.join('\n'), p.viewport,
+        JSON.stringify(p.h1), JSON.stringify(p.h2),
+        p.wordCount, p.indexable, p.indexabilityReason,
+        p.headers, p.og, p.spaFramework, p.relNext, p.relPrev,
+      ] as never[]
+    );
+    const row = this.get('SELECT id FROM pages WHERE url = ?', [p.url]);
+    return Number(row?.id ?? 0);
+  }
+
+  insertLink(srcId: number, dstUrl: string, anchor: string, follow: number, isInternal: number): void {
+    this.db.run(
+      'INSERT INTO links (src_id, dst_url, anchor, follow, is_internal) VALUES (?,?,?,?,?)',
+      [srcId, dstUrl, anchor, follow, isInternal] as never[]
+    );
+  }
+
+  insertImage(
+    pageId: number,
+    img: { src: string; alt: string | null; hasDimensions: boolean; loading: string | null },
+  ): void {
+    this.db.run(
+      'INSERT OR IGNORE INTO images (src) VALUES (?)',
+      [img.src] as never[],
+    );
+    const row = this.get('SELECT id FROM images WHERE src = ?', [img.src]);
+    if (!row) return;
+    const imageId = Number(row.id);
+    this.db.run(
+      'INSERT INTO image_refs (page_id, image_id, alt, has_dimensions, loading) VALUES (?,?,?,?,?)',
+      [pageId, imageId, img.alt, img.hasDimensions ? 1 : 0, img.loading] as never[],
+    );
+  }
+
+  insertHreflang(pageId: number, lang: string, href: string): void {
+    this.db.run(
+      'INSERT INTO hreflang (page_id, lang, href) VALUES (?,?,?)',
+      [pageId, lang, href] as never[],
+    );
+  }
+
+  insertStructuredData(
+    pageId: number,
+    sd: { format: string; type: string; json: string },
+  ): void {
+    this.db.run(
+      'INSERT INTO structured_data (page_id, format, type, json) VALUES (?,?,?,?)',
+      [pageId, sd.format, sd.type, sd.json] as never[],
+    );
+  }
+
+  insertIssue(checkId: string, pageId: number, detail: string | null): void {
+    this.db.run(
+      'INSERT INTO issues (check_id, page_id, detail) VALUES (?,?,?)',
+      [checkId, pageId, detail] as never[]
+    );
+  }
+
+  linkDstIds(): void {
+    this.db.run('UPDATE links SET dst_id = (SELECT id FROM pages WHERE pages.url = links.dst_url) WHERE dst_id IS NULL');
+  }
+
   all(sql: string, params: unknown[] = []): Record<string, unknown>[] {
     const stmt = this.db.prepare(sql);
     try {
