@@ -1,8 +1,8 @@
-// Pulse SEO Viewer service worker.
+// GKNECT PULSE WEBSITE CRAWLER service worker.
 // Strategy: network-first for navigations (users always get the newest app
 // when online; offline falls back to the cached shell), cache-first for
 // static assets (Vite hash-names them, so they are immutable).
-const CACHE = 'pulse-viewer-v2';
+const CACHE = 'pulse-viewer-v3';
 const CORE = ['./', './index.html', './manifest.webmanifest', './sql-wasm-browser.wasm', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {

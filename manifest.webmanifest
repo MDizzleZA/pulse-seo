@@ -1,7 +1,7 @@
 {
-  "name": "Pulse SEO Viewer",
+  "name": "GKNECT PULSE WEBSITE CRAWLER",
   "short_name": "Pulse Viewer",
-  "description": "Open Pulse SEO crawl projects (.pulse) in the browser — health scores, issues and every crawl view, fully offline.",
+  "description": "Open GKNECT PULSE WEBSITE CRAWLER crawl projects (.pulse) in the browser — health scores, issues and every crawl view, fully offline.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
